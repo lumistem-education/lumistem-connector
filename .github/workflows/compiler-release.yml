@@ -1,0 +1,128 @@
+name: Compiler release
+
+on:
+    push:
+        tags:
+            - 'compiler-v*'
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: Existing release tag
+                required: true
+                type: string
+
+permissions:
+    contents: read
+
+concurrency:
+    group: compiler-release-${{ inputs.tag || github.ref_name }}
+    cancel-in-progress: false
+
+jobs:
+    verify:
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        outputs:
+            tag: ${{ steps.release.outputs.tag }}
+            commit: ${{ steps.release.outputs.commit }}
+        defaults:
+            run:
+                working-directory: services/compiler-services
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+            - name: Select release tag
+              id: release
+              working-directory: .
+              env:
+                  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  if [[ ! "$RELEASE_TAG" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]; then
+                      echo "Invalid release tag." >&2
+                      exit 1
+                  fi
+                  git show-ref --verify "refs/tags/$RELEASE_TAG"
+                  git checkout --detach "refs/tags/$RELEASE_TAG"
+                  echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+                  echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            - uses: actions/setup-go@v6
+              with:
+                  go-version-file: services/compiler-services/go.mod
+                  cache-dependency-path: services/compiler-services/go.sum
+            - name: Test
+              env:
+                  CGO_ENABLED: '0'
+              run: go test ./...
+            - name: Vet
+              run: go vet ./...
+
+    build:
+        needs: verify
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - os: windows
+                      arch: amd64
+                    - os: darwin
+                      arch: amd64
+                    - os: darwin
+                      arch: arm64
+                    - os: linux
+                      arch: amd64
+                    - os: linux
+                      arch: arm64
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  ref: ${{ needs.verify.outputs.commit }}
+            - uses: actions/setup-go@v6
+              with:
+                  go-version-file: services/compiler-services/go.mod
+                  cache-dependency-path: services/compiler-services/go.sum
+            - name: Build archive
+              env:
+                  RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+                  TARGET_OS: ${{ matrix.os }}
+                  TARGET_ARCH: ${{ matrix.arch }}
+              shell: bash
+              run: bash services/compiler-services/scripts/build-release.sh "$RELEASE_TAG" "$TARGET_OS" "$TARGET_ARCH" "$RUNNER_TEMP/compiler-dist"
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: compiler-${{ matrix.os }}-${{ matrix.arch }}
+                  path: ${{ runner.temp }}/compiler-dist/*
+                  if-no-files-found: error
+                  retention-days: 14
+
+    release:
+        needs: [verify, build]
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        permissions:
+            contents: write
+        steps:
+            - uses: actions/download-artifact@v4
+              with:
+                  pattern: compiler-*
+                  merge-multiple: true
+                  path: dist
+            - name: Publish release
+              working-directory: dist
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  GH_REPO: ${{ github.repository }}
+                  RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  sha256sum *.zip *.tar.gz > SHA256SUMS
+                  if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+                      gh release upload "$RELEASE_TAG" ./* --clobber
+                  else
+                      gh release create "$RELEASE_TAG" ./* --verify-tag --title "$RELEASE_TAG" --notes "Local compiler builds for Windows, macOS and Linux."
+                  fi
