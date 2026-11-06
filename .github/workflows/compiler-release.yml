@@ -83,8 +83,8 @@ jobs:
                   ref: ${{ needs.verify.outputs.commit }}
             - uses: actions/setup-go@v6
               with:
-                  go-version-file: services/compiler-services/go.mod
-                  cache-dependency-path: services/compiler-services/go.sum
+                  go-version-file: compiler-services/go.mod
+                  cache-dependency-path: compiler-services/go.sum
             - name: Build archive
               env:
                   RELEASE_TAG: ${{ needs.verify.outputs.tag }}
