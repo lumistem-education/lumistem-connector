@@ -1,7 +1,7 @@
 directories:
-  data: /home/mrlung/LumiSTEM/lumistem-ecosystem/services/compiler-services/data
-  downloads: /home/mrlung/LumiSTEM/lumistem-ecosystem/services/compiler-services/data/staging
-  user: /home/mrlung/LumiSTEM/lumistem-ecosystem/services/compiler-services/workspace
+  data: ./data
+  user: ./data
+  downloads: ./data
 
 board_manager:
   additional_urls:
